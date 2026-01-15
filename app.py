@@ -10,15 +10,16 @@ import json
 st.set_page_config(page_title="PriviPlay", layout="wide")
 st.title("🔒 Private Video Player")
 
-# --- Google Drive 認証 (あなたのJSON専用の読み方) ---
+# --- Google Drive 認証 (あなたのJSON専用の読み込み方) ---
 def get_drive_service():
     try:
-        # SecretsからDRIVE_TOKENを読み込む
+        # Secretsからトークン情報を読み込む
         token_info = json.loads(st.secrets["DRIVE_TOKEN"])
         
-        # サービスアカウント用ではなく、OAuthユーザー用の命令を使う(ここが重要)
+        # 【重要】サービスアカウント用ではなく、個人ユーザー用の命令を使います
         creds = Credentials.from_authorized_user_info(token_info)
         
+        # 期限切れなら自動更新
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
             
@@ -47,7 +48,7 @@ if PASSWORD:
                 selected_file = st.selectbox("動画を選択してください", items, format_func=lambda x: x['name'])
                 
                 if st.button("再生を開始"):
-                    with st.spinner("4GB動画を復号中... 少し時間がかかります"):
+                    with st.spinner("4GB動画を復号中... メモリ消費を抑えて処理しています"):
                         # 鍵の生成
                         KEY = hashlib.sha256(PASSWORD.encode()).digest()
                         
