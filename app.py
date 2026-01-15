@@ -16,7 +16,7 @@ PASSWORD = st.sidebar.text_input("Encryption Password", value=default_pass, type
 
 # Google Drive 認証
 def get_drive_service():
-    info = json.loads(st.secrets["DRIVE_CREDENTIALS"])
+    info = json.loads(st.secrets["DRIVE_TOKEN"])
     creds = service_account.Credentials.from_service_account_info(info)
     return build('drive', 'v3', credentials=creds)
 
@@ -54,4 +54,5 @@ if PASSWORD:
             # 再生
             st.video(decrypted_data)
 else:
+
     st.warning("左側のサイドバーに合言葉を入力してください。")
