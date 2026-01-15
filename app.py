@@ -1,37 +1,57 @@
 import streamlit as st
 from googleapiclient.discovery import build
-from google.oauth2.credentials import Credentials
+from google.oauth2 import service_account
 from Crypto.Cipher import AES
 from Crypto.Util import Counter
 import hashlib
-import io
+import json
 
 st.set_page_config(page_title="PriviPlay", layout="wide")
 st.title("🔒 Private Video Player")
 
 # --- 設定 ---
-# 本来は secrets.toml などで管理しますが、まずは動作確認用
-PASSWORD = st.sidebar.text_input("Encryption Password", type="password")
+# 合言葉（Secretsに設定したものをデフォルトに、画面でも入力可能にする）
+default_pass = st.secrets.get("ENCRYPTION_PASSWORD", "")
+PASSWORD = st.sidebar.text_input("Encryption Password", value=default_pass, type="password")
+
+# Google Drive 認証
+def get_drive_service():
+    info = json.loads(st.secrets["DRIVE_CREDENTIALS"])
+    creds = service_account.Credentials.from_service_account_info(info)
+    return build('drive', 'v3', credentials=creds)
 
 if PASSWORD:
     KEY = hashlib.sha256(PASSWORD.encode()).digest()
-    
-    # ここでGoogle Driveからファイル一覧を取得する処理
-    # (アクセストークンの連携が必要になります)
-    st.info("鍵がセットされました。動画を選択してください。")
-    
-    # テスト表示用のプレイヤー（概念）
-    # 実際にはブラウザのJavaScriptで復号する処理をここに組み込みます
-    video_file = st.file_uploader("テスト：.encファイルを選択して再生確認", type="enc")
-    
-    if video_file:
-        # 最初の8バイト（nonce）を読み取る
-        nonce = video_file.read(8)
-        ctr = Counter.new(64, prefix=nonce)
-        cipher = AES.new(KEY, AES.MODE_CTR, counter=ctr)
-        
-        # 復号して再生（ブラウザのメモリ内で処理）
-        decrypted_data = cipher.decrypt(video_file.read())
-        st.video(decrypted_data)
+    service = get_drive_service()
+
+    # Google Driveから .enc ファイルを探す
+    results = service.files().list(
+        q="name contains '.enc'", fields="files(id, name)").execute()
+    items = results.get('files', [])
+
+    if not items:
+        st.write("Googleドライブに .enc ファイルが見つかりません。")
+    else:
+        # 動画を選択するセレクトボックス
+        option = st.selectbox("再生する動画を選んでください", items, format_func=lambda x: x['name'])
+
+        if st.button("再生開始"):
+            # 動画をストリーミング（少しずつ読み込んで復号）
+            file_id = option['id']
+            # ※本来は巨大ファイル用に分割読み込みが必要ですが、まずは全体をストリーム再生
+            request = service.files().get_media(fileId=file_id)
+            
+            # nonce (先頭8バイト) を取得
+            content = request.execute()
+            nonce = content[:8]
+            encrypted_data = content[8:]
+            
+            # 復号
+            ctr = Counter.new(64, prefix=nonce)
+            cipher = AES.new(KEY, AES.MODE_CTR, counter=ctr)
+            decrypted_data = cipher.decrypt(encrypted_data)
+            
+            # 再生
+            st.video(decrypted_data)
 else:
-    st.warning("合言葉を入力してください。")
+    st.warning("左側のサイドバーに合言葉を入力してください。")
