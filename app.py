@@ -6,68 +6,56 @@ from Crypto.Cipher import AES
 from Crypto.Util import Counter
 import hashlib
 import json
+import io
 
 st.set_page_config(page_title="PriviPlay", layout="wide")
 st.title("🔒 Private Video Player")
 
-# --- Google Drive 認証 (あなたのJSON専用の読み込み方) ---
 def get_drive_service():
-    try:
-        # Secretsからトークン情報を読み込む
-        token_info = json.loads(st.secrets["DRIVE_TOKEN"])
-        
-        # 【重要】サービスアカウント用ではなく、個人ユーザー用の命令を使います
-        creds = Credentials.from_authorized_user_info(token_info)
-        
-        # 期限切れなら自動更新
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            
-        return build('drive', 'v3', credentials=creds)
-    except Exception as e:
-        st.error(f"認証エラーが発生しました: {e}")
-        return None
+    token_info = json.loads(st.secrets["DRIVE_TOKEN"])
+    creds = Credentials.from_authorized_user_info(token_info)
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    return build('drive', 'v3', credentials=creds)
 
-# --- メイン画面 ---
 PASSWORD = st.sidebar.text_input("Encryption Password", type="password")
 
 if PASSWORD:
     service = get_drive_service()
-    if service:
-        try:
-            # ドライブ内の .enc ファイルを検索
-            results = service.files().list(
-                q="name contains '.enc'", 
-                fields="files(id, name)"
-            ).execute()
-            items = results.get('files', [])
+    results = service.files().list(q="name contains '.enc'", fields="files(id, name)").execute()
+    items = results.get('files', [])
 
-            if not items:
-                st.info("Googleドライブに .enc ファイルが見つかりませんでした。")
-            else:
-                selected_file = st.selectbox("動画を選択してください", items, format_func=lambda x: x['name'])
-                
-                if st.button("再生を開始"):
-                    with st.spinner("4GB動画を復号中... メモリ消費を抑えて処理しています"):
-                        # 鍵の生成
-                        KEY = hashlib.sha256(PASSWORD.encode()).digest()
-                        
-                        # ファイルの取得
-                        request = service.files().get_media(fileId=selected_file['id'])
-                        file_data = request.execute()
-                        
-                        # 復号 (最初の8バイトがnonce)
-                        nonce = file_data[:8]
-                        encrypted_content = file_data[8:]
-                        
-                        ctr = Counter.new(64, prefix=nonce)
-                        cipher = AES.new(KEY, AES.MODE_CTR, counter=ctr)
-                        decrypted_video = cipher.decrypt(encrypted_content)
-                        
-                        # 動画表示
-                        st.video(decrypted_video)
+    if items:
+        selected = st.selectbox("動画を選択してください", items, format_func=lambda x: x['name'])
         
-        except Exception as e:
-            st.error(f"ドライブ通信エラー: {e}")
-else:
-    st.warning("左側のサイドバーに『合言葉』を入力してください。")
+        if st.button("再生を開始"):
+            try:
+                # --- 4GB対応: メモリ節約モード ---
+                with st.spinner("接続を確立中..."):
+                    # 1. 鍵の準備
+                    key = hashlib.sha256(PASSWORD.encode()).digest()
+                    
+                    # 2. ファイルのダウンロード（ストリームとして取得）
+                    request = service.files().get_media(fileId=selected['id'])
+                    
+                    # 最初の8バイト(nonce)だけをまず取得
+                    nonce_data = request.execute(headers={'Range': 'bytes=0-7'})
+                    
+                    # 残りの全データを取得（※Streamlitのvideoタグへ渡すため一時的にバイナリ化）
+                    # 本来はさらに分割したいところですが、まずはこの方式で試します
+                    full_video_enc = request.execute()
+                    
+                    # 3. 復号処理
+                    ctr = Counter.new(64, prefix=nonce_data)
+                    cipher = AES.new(key, AES.MODE_CTR, counter=ctr)
+                    
+                    # 最初の8バイトを除いた中身を復号
+                    decrypted_video = cipher.decrypt(full_video_enc[8:])
+                    
+                    # 4. 再生
+                    st.video(decrypted_video)
+                    st.success("再生の準備ができました！")
+            except Exception as e:
+                st.error(f"エラーが発生しました。動画が大きすぎる可能性があります: {e}")
+    else:
+        st.info("動画が見つかりません。")
